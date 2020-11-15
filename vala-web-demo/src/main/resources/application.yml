@@ -1,5 +1,5 @@
 server:
-  port: 8001
+  port: 8002
 
 spring:
   jpa:
@@ -8,6 +8,7 @@ spring:
     show-sql: false
   datasource:
     url: jdbc:mysql://120.27.61.185:3306/npims?useSSL=false&serverTimezone=GMT&allowPublicKeyRetrieval=true
+#    url: jdbc:mysql://localhost:3306/npims?useSSL=false&serverTimezone=GMT&allowPublicKeyRetrieval=true
     username: root
     password: 19870120
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -27,10 +28,14 @@ spring:
     maxPoolPreparedStatementPerConnectionSize: 20
     useGlobalDataSourceStat: true
     connectionProperties: druid.stat.mergeSql=true;druid.stat.slowSqlMillis=50
-
   devtools:
     restart:
       enabled: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
 
 
 fdfs:
