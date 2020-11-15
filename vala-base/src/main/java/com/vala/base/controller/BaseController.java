@@ -3,6 +3,7 @@ package com.vala.base.controller;
 import com.vala.base.bean.SearchBean;
 import com.vala.base.bean.SearchResult;
 import com.vala.base.entity.BaseEntity;
+import com.vala.base.entity.FileColumn;
 import com.vala.base.entity.TreeEntity;
 import com.vala.base.service.BaseService;
 import com.vala.base.service.FastDfsService;
@@ -16,12 +17,16 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.event.ContextRefreshedEvent;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.multipart.MultipartFile;
 
+import javax.persistence.ManyToOne;
 import javax.persistence.Query;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
 import javax.transaction.Transactional;
 import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
@@ -34,14 +39,61 @@ public class BaseController<T extends BaseEntity> extends BaseControllerWraper<T
     public Class<T> domain;
     @Autowired
     public BaseService<T> baseService;
+
     @Autowired
-    FastDfsService fastDfsService;
+    public FastDfsService fastDfsService;
 
     @Override
     public void onApplicationEvent(ContextRefreshedEvent contextRefreshedEvent) {
         domain = (Class<T>)((ParameterizedType)getClass().getGenericSuperclass()).getActualTypeArguments()[0];
         baseService.setDomain(domain);
     }
+
+
+    @RequestMapping("/input/{type}")
+    public ResponseResult input(@PathVariable String type,@RequestPart(value = "file") MultipartFile file) {
+
+        return new ResponseResult("上传成功");
+    }
+
+    @RequestMapping("/output/{type}")
+    public ResponseResult output(@PathVariable String type,@RequestPart(value = "file") MultipartFile file) {
+        return new ResponseResult();
+    }
+
+
+
+    @Transactional
+    @ResponseBody
+    @RequestMapping("/set/file/{id}/{field}")
+    public ResponseResult dfsFileSet(@PathVariable Integer id, @PathVariable String field, @RequestPart(value = "file") MultipartFile file) throws Exception {
+        if(file==null) return new ResponseResult(600,"文件不存在");
+        Field f = this.domain.getDeclaredField(field);
+        FileColumn annotation = f.getAnnotation(FileColumn.class);
+        if(annotation!=null){
+            String type = annotation.type();
+            String fileName = file.getOriginalFilename();
+            String[] strs = this.fastDfsService.getNameAndExtension(fileName);;
+            String extension = strs[1];
+            String name = strs[0];
+            if(StringUtils.isNotEmpty(type)&&!extension.equalsIgnoreCase(type)) return new ResponseResult(600,field+"文件类型不匹配");
+
+            T bean = id==-1? this.baseService.newInstance(): this.baseService.get(id);
+
+            String path = (String) BeanUtils.get(bean, field);
+            if(StringUtils.isNotEmpty(path)){
+                fastDfsService.delete(path);
+            }
+            path = fastDfsService.upload(file.getBytes(), extension);
+            BeanUtils.set(bean,field,path);
+
+            this.baseService.saveOrUpdate(bean);
+            return new ResponseResult(200);
+        }else {
+            return new ResponseResult(600,field+"不是文件字段");
+        }
+    }
+
 
     @Transactional
     @RequestMapping("/update/many/{field}/{id}")
@@ -79,15 +131,16 @@ public class BaseController<T extends BaseEntity> extends BaseControllerWraper<T
     }
 
     @RequestMapping("/simple")
-    public ResponseResult distinct(){
-        String sql = "SELECT id,name FROM " + this.domain.getSimpleName();
-        Query nativeQuery = this.baseService.getEntityManager().createQuery(sql);
-        List<Object[]> resultList = nativeQuery.getResultList();
-        List<KV> list = new ArrayStack();
-        for (Object[] s : resultList) {
+    public ResponseResult simple(@RequestBody(required=false) T data) throws Exception {
+
+        SearchBean<T> params = new SearchBean<>();
+        params.setExact(data);
+        SearchResult<T> result = baseService.search(params);
+        List<KV> list = new ArrayList<>();
+        for (T t : result.getList()) {
             KV k = new KV();
-            k.setId(s[0]);
-            k.setName(s[1]);
+            k.setId(t.getId());
+            k.setName(t.getName());
             list.add(k);
         }
         return new ResponseResult(list);
@@ -105,35 +158,6 @@ public class BaseController<T extends BaseEntity> extends BaseControllerWraper<T
         return new ResponseResult(list);
     }
 
-
-    @Transactional
-    @ResponseBody
-    @RequestMapping("/dfs/text/set/{id}/{field}")
-    public ResponseResult dfsSet(@PathVariable Integer id, @PathVariable String field, @RequestBody String text) throws Exception {
-        // 搜索前校验
-
-        T bean = this.baseService.get(id);
-        String path = (String) BeanUtils.get(bean, field);
-        if(StringUtils.isNotEmpty(path)){
-            fastDfsService.delete(path);
-        }
-        path = fastDfsService.upload(text.getBytes(), "txt");
-        BeanUtils.set(bean,field,path);
-        this.baseService.saveOrUpdate(bean);
-        return new ResponseResult(200);
-    }
-
-    @Transactional
-    @ResponseBody
-    @RequestMapping("/dfs/text/get/{id}/{field}")
-    public ResponseResult dfsGet(@PathVariable Integer id, @PathVariable String field) throws Exception {
-        // 搜索前校验
-        T bean = this.baseService.get(id);
-        String path = (String) BeanUtils.get(bean, field);
-        byte[] read = this.fastDfsService.read(path);
-        String txt = new String(read);
-        return new ResponseResult(200,null,txt);
-    }
 
 
 
@@ -196,24 +220,51 @@ public class BaseController<T extends BaseEntity> extends BaseControllerWraper<T
         return new ResponseResult<>(bean);
     }
 
+    @Transactional
+    @ResponseBody
+    @RequestMapping("/get-sub/{id}/{field}")
+    public ResponseResult get(@PathVariable Integer id, @PathVariable String field) throws Exception {
+        T bean  = baseService.get(id);
+        bean = afterGet(bean);
+        Field f = this.domain.getField(field);
+        Object o = f.get(bean);
+
+        return new ResponseResult(o);
+    }
+
+    @ResponseBody
+    @RequestMapping("/get/all/{list}")
+    public ResponseResult<T> getAll(@PathVariable List<Integer> list) throws Exception {
+
+        List<T> results = new ArrayList<>();
+        for (Integer id : list) {
+            T bean = this.baseService.get(id);
+            results.add(bean);
+        }
+        return new ResponseResult(results);
+    }
+
+
+
 
     @ResponseBody
     @Transactional
     @RequestMapping("/update")
-    public ResponseResult<T> update(@RequestBody T ext)  {
+    public ResponseResult<T> update(@RequestBody T ext) throws Exception {
 
         Integer id = ext.getId();
         if(id==null){
-            return new ResponseResult<>(400,"主键不能为空");
+            return this.insert(ext);
         }else{
             T bean = baseService.get(id);
+
             if(bean==null)   return new ResponseResult<>(400, "数据不存在");
             // 更新前校验
             String message = beforeUpdate(ext, bean);
             if(message!=null){
                 return new ResponseResult<>(400,message);
             }else {
-                BeanUtils.extend(domain, bean, ext);
+                BeanUtils.extend(domain,bean,ext,ManyToOne.class);
                 bean = this.baseService.saveOrUpdate(bean);
                 // 更新后校验
                 message =  this.afterUpdate(bean);
@@ -222,24 +273,37 @@ public class BaseController<T extends BaseEntity> extends BaseControllerWraper<T
         }
     }
 
+    @RequestMapping("/update/all")
+    public ResponseResult updateAll(@RequestBody List<T> list){
+        this.baseService.saveAll(list);
+        return new ResponseResult(200,"批量更新成功");
+    }
+
+
+
+
+
     @Transactional
     @ResponseBody
     @RequestMapping("/delete/{id}")
     public ResponseResult<T> delete(@PathVariable Integer id) throws Exception {
         T bean  = baseService.get(id);
 
-        this.fastDfsService.deleteBeanFile(bean);
-
-        if(bean==null)   return new ResponseResult<>(400, "数据不存在");
-        // 删除前校验
-        String message = this.beforeDelete(bean);
-        if(message!=null){
-            return new ResponseResult<>(400,message);
-        }else {
-            baseService.delete(id);
-            message = this.afterDelete(bean);
-            return new ResponseResult<T>(message);
-        }
+//        try {
+            this.fastDfsService.deleteBeanFile(bean);
+            if(bean==null)   return new ResponseResult<>(400, "数据不存在");
+            // 删除前校验
+            String message = this.beforeDelete(bean);
+            if(message!=null){
+                return new ResponseResult<>(400,message);
+            }else {
+                baseService.delete(id);
+                message = this.afterDelete(bean);
+                return new ResponseResult<T>(message);
+            }
+//        } catch (Exception e) {
+//            return new ResponseResult<T>(400,e.getMessage());
+//        }
     }
 
 
@@ -247,7 +311,15 @@ public class BaseController<T extends BaseEntity> extends BaseControllerWraper<T
     @ResponseBody
     @RequestMapping("/deleteAll/{ids}")
     public ResponseResult<T> delete(@PathVariable List<Integer> ids) throws Exception {
-        int count = this.baseService.delete(ids);
+        int count = 0;
+        for (Integer id : ids) {
+            if(id==0) continue;
+
+            T bean  = baseService.get(id);
+            this.fastDfsService.deleteBeanFile(bean);
+            boolean flag = this.baseService.delete(bean);
+            if(flag) count++;
+        }
         return new ResponseResult<T>(String.format("成功删除 %s 条数据",count));
     }
 
@@ -367,5 +439,22 @@ public class BaseController<T extends BaseEntity> extends BaseControllerWraper<T
     }
 
 
+    public void setSession(String key, Object value){
+        this.session().setAttribute(key,value);
+    }
+    public Object getSession(String key){
+        return this.session().getAttribute(key);
+    }
+
+    private HttpSession session(){
+        ServletRequestAttributes requestAttributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if(null != requestAttributes) {
+            HttpServletResponse response = requestAttributes.getResponse();
+            HttpServletRequest request = requestAttributes.getRequest();
+            HttpSession session = request.getSession();
+            return session;
+        }
+        return null;
+    }
 
 }

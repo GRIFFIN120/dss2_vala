@@ -2,9 +2,11 @@ package com.vala.base.service;
 
 import com.vala.base.bean.SearchBean;
 import com.vala.base.bean.SearchResult;
+import com.vala.base.entity.SimpleEntity;
 import com.vala.commons.util.BeanUtils;
 import com.vala.commons.util.Constants;
 import com.vala.base.entity.BaseEntity;
+import org.apache.commons.collections.ArrayStack;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.context.annotation.Scope;
 import org.springframework.data.domain.*;
@@ -12,24 +14,20 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
-import javax.persistence.EntityManager;
-import javax.persistence.ManyToMany;
-import javax.persistence.PersistenceContext;
-import javax.persistence.Query;
+import javax.persistence.*;
 import javax.transaction.Transactional;
 import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Service
 @Scope("prototype")
 public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
 
+
     // 资源加载
     @Resource
     private BaseRepo repo;
+    @Override
     public JpaRepository getRepo() {
         return repo;
     }
@@ -70,18 +68,13 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
     // GET
 
     @Override
-    public T get(T bean) {
-        T one = null;
-        if(bean.getId()!=null){
-            return this.get(bean.getId());
-        }else {
-            List<T> op = this.getRepo().findAll(Example.of(bean));
-            return op.size() !=0 ? op.get(0) : null;
-        }
+    public T get(T bean) throws Exception {
+        List<T> op = this.getRepo().findAll(Example.of(bean));
+        return op.size() !=0 ? op.get(0) : null;
     }
-
+    @Transactional
     @Override
-    public T get(Integer id) {
+    public T get(Integer id) throws Exception {
         T instance = this.newInstance(id);
         if(instance != null){
             Optional<T> op = this.getRepo().findOne(Example.of(instance));
@@ -90,10 +83,11 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
         return instance;
     }
 
+
     // SaveOrUpdate
 
     @Override
-    public T saveOrUpdate(T bean) {
+    public T saveOrUpdate(T bean) throws Exception {
         if (bean == null) return null;
         if(StringUtils.isEmpty(bean.getDate())){
             bean.setDate(Constants.DATE_FORMAT.format(new Date()));
@@ -101,12 +95,37 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
         if(bean.getTimestamp()==null){
             bean.setTimestamp(new Date());
         }
+
+
+        if(bean.getId()!=null){
+            T target = this.get(bean.id);
+            BeanUtils.extend(this.domain,target, bean);
+            bean = target;
+        }
+
         return (T) this.getRepo().save(bean);
     }
 
+    @Deprecated
+    @Transactional
     @Override
-    public List<T> saveOrUpdate(List bean) {
-        return null;
+    public List saveOrUpdate(List list) {
+        this.repo.saveAll(list);
+        return list;
+    }
+
+    @Transactional
+    @Override
+    public List saveAll(List<T> list) {
+        List<T> nlist = new ArrayStack();
+        for (T t : list) {
+            T bean = this.get(this.domain, t.getId());
+            if(bean==null) continue;
+            BeanUtils.extend(this.domain,bean,t);
+            nlist.add(bean);
+        }
+        this.repo.saveAll(nlist);
+        return nlist;
     }
 
     // Delete
@@ -116,19 +135,24 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
         T bean = this.get(id);
         if(bean==null) return false;
         // 删除bean涉及的中间键（遵循规范）
-        List<Field> m2m = BeanUtils.hasAnnotation(this.domain, ManyToMany.class);
+        List<Field> m2m = BeanUtils.getFieldsByAnnotation(this.domain, ManyToMany.class);
         for (Field field : m2m) {
             ManyToMany annotation = field.getAnnotation(ManyToMany.class);
             String mappedBy = annotation.mappedBy();
             boolean isDominating = StringUtils.isEmpty(mappedBy);
             if(isDominating){
-                field.set(bean,new ArrayList<>());
+                if(field.getType().isAssignableFrom(List.class)){
+                    field.set(bean,new ArrayList<>());
+                }else if(field.getType().isAssignableFrom(Set.class)){
+                    field.set(bean,new HashSet<>());
+                }
+
             }else{
                 Class mappedClass = BeanUtils.getFieldParameterizedType(domain,field.getName());
                 Field mappedField = mappedClass.getField(mappedBy);
-                List list = (List) field.get(bean);
+                Collection list = (Collection) field.get(bean);
                 for (Object mappedBean : list) {
-                    List mappedList = (List)  mappedField.get(mappedBean);
+                    Collection mappedList = (Collection)  mappedField.get(mappedBean);
                     mappedList.remove(bean);
                 }
             }
@@ -139,15 +163,6 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
         return true;
     }
 
-    @Override
-    public int delete(List<Integer> its) throws Exception {
-
-        int count = 0;
-        for (Integer id : its) {
-            this.delete(id);
-        }
-        return count;
-    }
 
     @Override
     public boolean delete(T bean) throws Exception {
@@ -155,10 +170,12 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
         return delete(bean.getId());
     }
 
-    // Search
 
+
+    // Search
+    @Transactional
     @Override
-    public SearchResult<T> search(SearchBean<T> search) {
+    public SearchResult<T> search(SearchBean<T> search) throws Exception {
 
 
         Example<T> example = getExample(search.getExact(), search.getFuzzy());
@@ -174,18 +191,29 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
             Pageable pageable = PageRequest.of(page-1, size, sort);
             Page p = this.getRepo().findAll(example, pageable);
             List<T> list = p.getContent();
+            this.eraseLazy(list);
             return new SearchResult<T>(p.getTotalElements(), Long.valueOf(list.size()), page, size, p.getTotalPages(), search.getSortColumn(), search.getDirection(), list);
         }else {
             List<T> list = this.getRepo().findAll(example, sort);
             Long total = Long.valueOf(list.size());
+            this.eraseLazy(list);
             return new SearchResult<T>(total, search.getSortColumn(), search.getDirection(), list);
         }
-
-
     }
 
+
+    private void eraseLazy(List<T> list) throws Exception {
+        List<Field> lzFs = BeanUtils.getLazyFieldInListForm(this.domain);
+        for (T t : list) {
+            for (Field lzF : lzFs) {
+                lzF.set(t,null);
+            }
+        }
+    }
+
+
     @Override
-    public SearchResult<T> search() {
+    public SearchResult<T> search() throws Exception {
         T exact = this.newInstance();
         SearchBean<T> search = new SearchBean<>(exact);
         return this.search(search);
@@ -230,7 +258,7 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
     // 扩展
 
     @Override
-    public T load(T ext) {
+    public T load(T ext) throws Exception {
         T bean = null;
         if(ext.getId() != null){
             bean = this.load(ext.getId(),ext);
@@ -239,10 +267,10 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
     }
 
     @Override
-    public T load(Integer id, T ext) {
+    public T load(Integer id, T ext) throws Exception {
         T bean = this.get(ext.getId());
         if (bean != null) {
-            BeanUtils.extend(domain, bean, ext);
+            BeanUtils.extend(domain, bean, ext, null);
         }
         return bean;
     }
@@ -255,7 +283,7 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
 
     @Transactional
     @Override
-    public void order(Integer thisId, Integer thatId)  {
+    public void order(Integer thisId, Integer thatId) throws Exception {
         T thisBean = this.get(thisId);
         T thatBean = this.get(thatId);
         Date temp = thisBean.getTimestamp();
@@ -277,6 +305,12 @@ public class BaseServiceImpl<T extends BaseEntity> implements BaseService<T> {
             bean = null;
         }
         return bean;
+    }
+
+    @Override
+    public <O extends BaseEntity> List<O> find(O bean) {
+        List all = this.getRepo().findAll(Example.of(bean));
+        return all;
     }
 
     @Override

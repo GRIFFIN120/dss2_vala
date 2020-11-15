@@ -11,4 +11,8 @@ import javax.persistence.Entity;
 @ToString
 public class MarkStyle extends BaseEntity {
 
+    public String type;  //  simple, svg, icon, circle,
+
+
+
 }
