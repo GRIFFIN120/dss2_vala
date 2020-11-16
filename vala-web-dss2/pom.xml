@@ -10,9 +10,9 @@
         <relativePath>../pom.xml</relativePath>
     </parent>
     <groupId>com.vala</groupId>
-    <artifactId>vala-web-demo</artifactId>
+    <artifactId>vala-web-dss2</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>vala-web-demo</name>
+    <name>vala-web-dss2</name>
     <description>Demo project for Spring Boot</description>
 
     <properties>

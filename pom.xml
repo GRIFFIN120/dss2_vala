@@ -26,7 +26,7 @@
         <module>vala-service-jsoup</module>
         <module>vala-service-map</module>
         <module>vala-service-websocket</module>
-        <module>vala-web-demo</module>
+        <module>vala-web-dss2</module>
     </modules>
 
     <dependencies>
