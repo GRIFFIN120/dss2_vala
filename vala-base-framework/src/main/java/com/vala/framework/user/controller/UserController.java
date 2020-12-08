@@ -2,12 +2,15 @@ package com.vala.framework.user.controller;
 
 import com.vala.base.controller.BaseController;
 import com.vala.commons.bean.ResponseResult;
+import com.vala.framework.user.entity.RoleBasic;
 import com.vala.framework.user.entity.UserBasic;
 import com.vala.framework.utils.JwtUtils;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -38,6 +41,11 @@ public class UserController extends BaseController<UserBasic> {
             user.id = userBasic.id;
             return new ResponseResult("登录成功", user);
         }else {
+            RoleBasic role = baseService.get(RoleBasic.class,5);
+            List<RoleBasic> roles = new ArrayList<>();
+            roles.add(role);
+            user.setRoles(roles);
+
             this.baseService.saveOrUpdate(user);
             return new ResponseResult("用户添加成功", user);
         }
