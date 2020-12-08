@@ -29,6 +29,23 @@ public class UserController extends BaseController<UserBasic> {
         }
     }
 
+    @RequestMapping("/checkLocal")
+    public ResponseResult<UserBasic> checkLocal(@RequestBody UserBasic user) throws Exception {
+        UserBasic temp = new UserBasic();
+        temp.setUsername(user.getUsername());
+        UserBasic userBasic = this.baseService.get(temp);
+        if(userBasic!=null){
+            user.id = userBasic.id;
+            return new ResponseResult("登录成功", user);
+        }else {
+            this.baseService.saveOrUpdate(user);
+            return new ResponseResult("用户添加成功", user);
+        }
+    }
+
+
+
+
     @RequestMapping("/logout")
     public ResponseResult login() throws Exception {
         return new ResponseResult(200,"已登出系统，欢迎再次使用");
